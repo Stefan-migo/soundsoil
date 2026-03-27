@@ -19,6 +19,7 @@ import { colors } from '../theme/colors';
 import { useSensors } from '../hooks/useSensors';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { usePresets } from '../hooks/usePresets';
+import { useAudio } from '../hooks/useAudio';
 import { webSocketService } from '../services/WebSocketService';
 
 type HomeScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
@@ -29,7 +30,7 @@ interface Props {
 
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
   // Presets
-  const { activePreset, presets } = usePresets();
+  const { activePreset } = usePresets();
 
   // Local UI state
   const [motionEnabled, setMotionEnabled] = useState(true);
@@ -39,7 +40,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   // WebSocket connection
   const { status: wsStatus, connect, disconnect } = useWebSocket({ autoConnect: false });
 
-  // Motion sensor data - only active when motionEnabled is true
+  // Motion sensor data
   const {
     motionData,
     setEnabled: setSensorsEnabled,
@@ -49,7 +50,20 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     webSocketService: wsStatus === 'connected' ? webSocketService : null,
   });
 
-  // Sync motion toggle with active preset
+  // Audio data
+  const {
+    audioData,
+    isRecording,
+    hasPermission,
+    enabled: audioEnabledHook,
+    setEnabled: setAudioEnabledHook,
+  } = useAudio({
+    enabled: audioEnabled,
+    fftBins: activePreset?.audio.fftBins || 8,
+    webSocketService: wsStatus === 'connected' ? webSocketService : null,
+  });
+
+  // Sync toggles with active preset
   useEffect(() => {
     if (activePreset) {
       setMotionEnabled(activePreset.motion.enabled);
@@ -57,6 +71,11 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       setAudioEnabled(activePreset.audio.enabled);
     }
   }, [activePreset]);
+
+  // Sync audio hook with audioEnabled toggle
+  useEffect(() => {
+    setAudioEnabledHook(audioEnabled);
+  }, [audioEnabled, setAudioEnabledHook]);
 
   const isConnected = wsStatus === 'connected';
 
@@ -67,17 +86,13 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     setSensorsEnabled(newValue);
   }, [motionEnabled, setSensorsEnabled]);
 
-  // Handle connect button press
+  // Handle connect button
   const handleConnectPress = useCallback(() => {
     if (isConnected) {
-      Alert.alert(
-        'Desconectar',
-        '¿Deseas desconectarte del servidor?',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Desconectar', style: 'destructive', onPress: disconnect },
-        ]
-      );
+      Alert.alert('Desconectar', '¿Deseas desconectarte del servidor?', [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Desconectar', style: 'destructive', onPress: disconnect },
+      ]);
     } else {
       Alert.prompt(
         'Conectar a Servidor',
@@ -88,11 +103,9 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             text: 'Conectar',
             onPress: (ip) => {
               if (ip) {
-                const host = ip.trim();
-                const port = activePreset?.oscTarget.port || 8443;
                 webSocketService.configure({
-                  host,
-                  port,
+                  host: ip.trim(),
+                  port: activePreset?.oscTarget.port || 8443,
                   path: '/',
                 });
                 connect();
@@ -106,10 +119,9 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }
   }, [isConnected, connect, disconnect, activePreset]);
 
-  // Format motion data for display
+  // Format motion value
   const formatMotionValue = (value: number): string => {
-    const formatted = value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
-    return formatted;
+    return value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
   };
 
   return (
@@ -122,9 +134,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           <View
             style={[
               styles.statusDot,
-              {
-                backgroundColor: isConnected ? colors.connected : colors.disconnected,
-              },
+              { backgroundColor: isConnected ? colors.connected : colors.disconnected },
             ]}
           />
           <Text style={styles.headerTitle}>SOILSOUND</Text>
@@ -144,11 +154,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       {/* Live Data Area */}
       <View style={styles.liveDataArea}>
         <View style={styles.connectionStatus}>
-          <Text
-            style={[
-              styles.connectionDot,
-              { color: isConnected ? colors.active : colors.inactive },
-            ]}>
+          <Text style={[styles.connectionDot, { color: isConnected ? colors.active : colors.inactive }]}>
             ◉
           </Text>
           <Text style={styles.connectionText}>
@@ -173,13 +179,39 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Audio Level Bar (placeholder for now) */}
-        <View style={styles.audioBar}>
-          <Text style={styles.audioLabel}>audio:</Text>
-          <View style={styles.audioBarContainer}>
-            <View style={[styles.audioBarFill, { width: audioEnabled ? '45%' : '0%' }]} />
+        {/* Audio Level Bar with FFT */}
+        <Text style={styles.liveDataLabel}>audio:</Text>
+        <View style={styles.audioContainer}>
+          <View style={styles.audioBarWrapper}>
+            <View style={styles.audioBarContainer}>
+              <View
+                style={[
+                  styles.audioBarFill,
+                  { width: `${(audioData.level || 0) * 100}%` },
+                ]}
+              />
+            </View>
+            <Text style={styles.audioPercent}>
+              {audioEnabled && hasPermission
+                ? `${Math.round((audioData.level || 0) * 100)}%`
+                : '--'}
+            </Text>
           </View>
-          <Text style={styles.audioPercent}>{audioEnabled ? '45%' : '--'}</Text>
+          {/* FFT Bars */}
+          {audioEnabled && hasPermission && (
+            <View style={styles.fftContainer}>
+              {audioData.fft?.map((value, index) => (
+                <View key={index} style={styles.fftBar}>
+                  <View
+                    style={[
+                      styles.fftBarFill,
+                      { height: `${Math.min(100, value * 100)}%` },
+                    ]}
+                  />
+                </View>
+              )) || null}
+            </View>
+          )}
         </View>
       </View>
 
@@ -232,6 +264,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       <View style={styles.debugInfo}>
         <Text style={styles.debugText}>
           accel: {motionData.accel.x.toFixed(3)}, {motionData.accel.y.toFixed(3)}, {motionData.accel.z.toFixed(3)}
+          {' | '} audio: {(audioData.level || 0).toFixed(2)}
         </Text>
       </View>
     </SafeAreaView>
@@ -327,16 +360,13 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontWeight: '600',
   },
-  audioBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  audioContainer: {
     width: '100%',
     paddingHorizontal: 20,
   },
-  audioLabel: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    marginRight: 8,
+  audioBarWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   audioBarContainer: {
     flex: 1,
@@ -355,6 +385,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginLeft: 8,
     width: 40,
+  },
+  fftContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    height: 30,
+    paddingHorizontal: 20,
+  },
+  fftBar: {
+    flex: 1,
+    marginHorizontal: 1,
+    backgroundColor: colors.surface,
+    borderRadius: 2,
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
+  },
+  fftBarFill: {
+    backgroundColor: colors.active,
+    borderRadius: 2,
   },
   presetSelector: {
     flexDirection: 'row',
