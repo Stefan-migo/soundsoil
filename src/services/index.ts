@@ -11,3 +11,6 @@ export type { ConnectionStatus, WebSocketConfig } from './WebSocketService';
 export { presetService } from './PresetService';
 export { audioService } from './AudioService';
 export type { AudioServiceConfig } from './AudioService';
+
+export { connectionService } from './ConnectionService';
+export type { ConnectionSettings } from './ConnectionService';

@@ -12,7 +12,6 @@ import {
   SafeAreaView,
   StatusBar,
   Alert,
-  ActivityIndicator,
 } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Camera, useFrameProcessor, Frame } from 'react-native-vision-camera';
@@ -23,7 +22,9 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { usePresets } from '../hooks/usePresets';
 import { useAudio } from '../hooks/useAudio';
 import { useCamera } from '../hooks/useCamera';
+import { useConnection } from '../hooks/useConnection';
 import { webSocketService } from '../services/WebSocketService';
+import { ConnectionDialog } from '../components/ConnectionDialog';
 
 type HomeScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -35,10 +36,14 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   // Presets
   const { activePreset } = usePresets();
 
+  // Connection settings
+  const { settings: connectionSettings } = useConnection();
+
   // Local UI state
   const [motionEnabled, setMotionEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(true);
+  const [showConnectionDialog, setShowConnectionDialog] = useState(false);
 
   // WebSocket connection
   const { status: wsStatus, connect, disconnect } = useWebSocket({ autoConnect: false });
@@ -142,35 +147,17 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   // Handle connect button
   const handleConnectPress = useCallback(() => {
     if (isConnected) {
-      Alert.alert('Desconectar', '¿Deseas desconectarte del servidor?', [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Desconectar', style: 'destructive', onPress: disconnect },
-      ]);
+      disconnect();
     } else {
-      Alert.prompt(
-        'Conectar a Servidor',
-        'Ingresa la IP del proxy',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Conectar',
-            onPress: (ip) => {
-              if (ip) {
-                webSocketService.configure({
-                  host: ip.trim(),
-                  port: activePreset?.oscTarget.port || 8443,
-                  path: '/',
-                });
-                connect();
-              }
-            },
-          },
-        ],
-        'plain-text',
-        activePreset?.oscTarget.host || '192.168.1.50'
-      );
+      setShowConnectionDialog(true);
     }
-  }, [isConnected, connect, disconnect, activePreset]);
+  }, [isConnected, disconnect]);
+
+  // Handle connection from dialog
+  const handleConnect = useCallback((host: string, port: number) => {
+    webSocketService.configure({ host, port, path: '/' });
+    connect();
+  }, [connect]);
 
   // Format motion value
   const formatMotionValue = (value: number): string => {
@@ -359,11 +346,16 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       {/* Debug Info */}
       <View style={styles.debugInfo}>
         <Text style={styles.debugText}>
-          accel: {motionData.accel.x.toFixed(3)}, {motionData.accel.y.toFixed(3)}, {motionData.accel.z.toFixed(3)}
-          {' | '} audio: {(audioData.level || 0).toFixed(2)}
+          {connectionSettings.host}:{connectionSettings.port}
         </Text>
       </View>
     </SafeAreaView>
+
+    <ConnectionDialog
+      visible={showConnectionDialog}
+      onClose={() => setShowConnectionDialog(false)}
+      onConnect={handleConnect}
+    />
   );
 };
 
