@@ -3,7 +3,7 @@
  * Main screen with live data, preset selector, and sensor tiles
  */
 
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,10 +11,14 @@ import {
   TouchableOpacity,
   SafeAreaView,
   StatusBar,
+  Alert,
 } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types';
 import { colors } from '../theme/colors';
+import { useSensors } from '../hooks/useSensors';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { webSocketService } from '../services/WebSocketService';
 
 type HomeScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -23,10 +27,81 @@ interface Props {
 }
 
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
-  const [connected, setConnected] = React.useState(false);
-  const [motionEnabled, setMotionEnabled] = React.useState(true);
-  const [cameraEnabled, setCameraEnabled] = React.useState(false);
-  const [audioEnabled, setAudioEnabled] = React.useState(true);
+  // Local UI state
+  const [motionEnabled, setMotionEnabled] = useState(true);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [showConnectionDialog, setShowConnectionDialog] = useState(false);
+
+  // WebSocket connection (auto-connect disabled, manual connect)
+  const {
+    status: wsStatus,
+    connect,
+    disconnect,
+  } = useWebSocket({ autoConnect: false });
+
+  // Motion sensor data - only active when motionEnabled is true
+  const {
+    motionData,
+    enabled: sensorsActive,
+    setEnabled: setSensorsEnabled,
+  } = useSensors({
+    enabled: motionEnabled,
+    interval: 33,
+    webSocketService: wsStatus === 'connected' ? webSocketService : null,
+  });
+
+  const isConnected = wsStatus === 'connected';
+
+  // Handle motion tile toggle
+  const toggleMotion = useCallback(() => {
+    const newValue = !motionEnabled;
+    setMotionEnabled(newValue);
+    setSensorsEnabled(newValue);
+  }, [motionEnabled, setSensorsEnabled]);
+
+  // Handle connect button press
+  const handleConnectPress = useCallback(() => {
+    if (isConnected) {
+      Alert.alert(
+        'Desconectar',
+        '¿Deseas desconectarte del servidor?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Desconectar', style: 'destructive', onPress: disconnect },
+        ]
+      );
+    } else {
+      Alert.prompt(
+        'Conectar a Servidor',
+        'Ingresa la IP del proxy',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Conectar',
+            onPress: (ip) => {
+              if (ip) {
+                webSocketService.configure({
+                  host: ip,
+                  port: 8443,
+                  path: '/',
+                });
+                connect();
+              }
+            },
+          },
+        ],
+        'plain-text',
+        '192.168.1.50'
+      );
+    }
+  }, [isConnected, connect, disconnect]);
+
+  // Format motion data for display
+  const formatMotionValue = (value: number): string => {
+    const formatted = value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
+    return formatted;
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -35,7 +110,16 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <View style={[styles.statusDot, { backgroundColor: connected ? colors.connected : colors.disconnected }]} />
+          <View
+            style={[
+              styles.statusDot,
+              {
+                backgroundColor: isConnected
+                  ? colors.connected
+                  : colors.disconnected,
+              },
+            ]}
+          />
           <Text style={styles.headerTitle}>SOILSOUND</Text>
         </View>
         <View style={styles.headerRight}>
@@ -44,8 +128,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             onPress={() => navigation.navigate('Settings')}>
             <Text style={styles.headerIcon}>⚙️</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.headerButton}>
-            <Text style={styles.headerIcon}>📡</Text>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={handleConnectPress}>
+            <Text style={styles.headerIcon}>{isConnected ? '📡' : '📡'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -53,25 +139,62 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       {/* Live Data Area */}
       <View style={styles.liveDataArea}>
         <View style={styles.connectionStatus}>
-          <Text style={styles.connectionDot}>◉</Text>
+          <Text
+            style={[
+              styles.connectionDot,
+              { color: isConnected ? colors.active : colors.inactive },
+            ]}>
+            ◉
+          </Text>
           <Text style={styles.connectionText}>
-            {connected ? 'CONECTADO' : 'DESCONECTADO'}
+            {isConnected ? 'CONECTADO' : 'DESCONECTADO'}
           </Text>
         </View>
-        <Text style={styles.liveDataText}>
-          motion: +0.12 | -0.04 | 9.81
-        </Text>
+
+        {/* Motion Data */}
+        <Text style={styles.liveDataLabel}>motion:</Text>
+        <View style={styles.motionDataContainer}>
+          <View style={styles.motionAxis}>
+            <Text style={styles.axisLabel}>X</Text>
+            <Text style={styles.axisValue}>
+              {formatMotionValue(motionData.accel.x)}
+            </Text>
+          </View>
+          <View style={styles.motionAxis}>
+            <Text style={styles.axisLabel}>Y</Text>
+            <Text style={styles.axisValue}>
+              {formatMotionValue(motionData.accel.y)}
+            </Text>
+          </View>
+          <View style={styles.motionAxis}>
+            <Text style={styles.axisLabel}>Z</Text>
+            <Text style={styles.axisValue}>
+              {formatMotionValue(motionData.accel.z)}
+            </Text>
+          </View>
+        </View>
+
+        {/* Audio Level Bar (placeholder for now) */}
         <View style={styles.audioBar}>
           <Text style={styles.audioLabel}>audio:</Text>
           <View style={styles.audioBarContainer}>
-            <View style={[styles.audioBarFill, { width: '45%' }]} />
+            <View
+              style={[
+                styles.audioBarFill,
+                { width: audioEnabled ? '45%' : '0%' },
+              ]}
+            />
           </View>
-          <Text style={styles.audioPercent}>45%</Text>
+          <Text style={styles.audioPercent}>
+            {audioEnabled ? '45%' : '--'}
+          </Text>
         </View>
       </View>
 
       {/* Preset Selector */}
-      <TouchableOpacity style={styles.presetSelector}>
+      <TouchableOpacity
+        style={styles.presetSelector}
+        onPress={() => navigation.navigate('Presets')}>
         <Text style={styles.presetLabel}>preset:</Text>
         <Text style={styles.presetName}>Performance</Text>
         <Text style={styles.presetArrow}>▼</Text>
@@ -81,54 +204,56 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       <View style={styles.tilesContainer}>
         {/* Motion Tile */}
         <TouchableOpacity
-          style={[
-            styles.tile,
-            motionEnabled && styles.tileActive,
-          ]}
-          onPress={() => setMotionEnabled(!motionEnabled)}>
+          style={[styles.tile, motionEnabled && styles.tileActive]}
+          onPress={toggleMotion}>
           <Text style={styles.tileIcon}>🎯</Text>
           <Text style={styles.tileTitle}>MOTION</Text>
-          <Text style={[
-            styles.tileStatus,
-            motionEnabled ? styles.statusOn : styles.statusOff,
-          ]}>
+          <Text
+            style={[
+              styles.tileStatus,
+              motionEnabled ? styles.statusOn : styles.statusOff,
+            ]}>
             {motionEnabled ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
 
         {/* Camera Tile */}
         <TouchableOpacity
-          style={[
-            styles.tile,
-            cameraEnabled && styles.tileActive,
-          ]}
+          style={[styles.tile, cameraEnabled && styles.tileActive]}
           onPress={() => setCameraEnabled(!cameraEnabled)}>
           <Text style={styles.tileIcon}>📷</Text>
           <Text style={styles.tileTitle}>CAM</Text>
-          <Text style={[
-            styles.tileStatus,
-            cameraEnabled ? styles.statusOn : styles.statusOff,
-          ]}>
+          <Text
+            style={[
+              styles.tileStatus,
+              cameraEnabled ? styles.statusOn : styles.statusOff,
+            ]}>
             {cameraEnabled ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
 
         {/* Audio Tile */}
         <TouchableOpacity
-          style={[
-            styles.tile,
-            audioEnabled && styles.tileActive,
-          ]}
+          style={[styles.tile, audioEnabled && styles.tileActive]}
           onPress={() => setAudioEnabled(!audioEnabled)}>
           <Text style={styles.tileIcon}>🎤</Text>
           <Text style={styles.tileTitle}>AUDIO</Text>
-          <Text style={[
-            styles.tileStatus,
-            audioEnabled ? styles.statusOn : styles.statusOff,
-          ]}>
+          <Text
+            style={[
+              styles.tileStatus,
+              audioEnabled ? styles.statusOn : styles.statusOff,
+            ]}>
             {audioEnabled ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
+      </View>
+
+      {/* Sensor Availability Debug Info */}
+      <View style={styles.debugInfo}>
+        <Text style={styles.debugText}>
+          accel: {motionData.accel.x.toFixed(3)}, {motionData.accel.y.toFixed(3)},{' '}
+          {motionData.accel.z.toFixed(3)}
+        </Text>
       </View>
     </SafeAreaView>
   );
@@ -185,7 +310,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   connectionDot: {
-    color: colors.active,
     fontSize: 12,
     marginRight: 8,
   },
@@ -195,16 +319,40 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 1,
   },
-  liveDataText: {
+  liveDataLabel: {
     color: colors.textSecondary,
-    fontSize: 14,
+    fontSize: 12,
+    alignSelf: 'flex-start',
+    marginLeft: 20,
+    marginBottom: 4,
+  },
+  motionDataContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: 16,
+    gap: 20,
+  },
+  motionAxis: {
+    alignItems: 'center',
+    minWidth: 60,
+  },
+  axisLabel: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  axisValue: {
+    color: colors.active,
+    fontSize: 18,
     fontFamily: 'monospace',
-    marginBottom: 12,
+    fontWeight: '600',
   },
   audioBar: {
     flexDirection: 'row',
     alignItems: 'center',
     width: '100%',
+    paddingHorizontal: 20,
   },
   audioLabel: {
     color: colors.textSecondary,
@@ -294,6 +442,18 @@ const styles = StyleSheet.create({
   },
   statusOff: {
     color: colors.inactive,
+  },
+  debugInfo: {
+    position: 'absolute',
+    bottom: 10,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  debugText: {
+    color: colors.textMuted,
+    fontSize: 9,
+    fontFamily: 'monospace',
   },
 });
 
