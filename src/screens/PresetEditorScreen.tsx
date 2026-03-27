@@ -3,12 +3,22 @@
  * Create or edit a preset configuration
  */
 
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Switch, TextInput, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Switch,
+  TextInput,
+  TouchableOpacity,
+  Alert,
+} from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../types';
 import { colors } from '../theme/colors';
+import { usePresets } from '../hooks/usePresets';
 
 type PresetEditorNavigationProp = StackNavigationProp<RootStackParamList, 'PresetEditor'>;
 type PresetEditorRouteProp = RouteProp<RootStackParamList, 'PresetEditor'>;
@@ -22,12 +32,70 @@ const PresetEditorScreen: React.FC<Props> = ({ navigation, route }) => {
   const { presetId } = route.params || {};
   const isEditing = !!presetId;
 
-  const [name, setName] = React.useState(isEditing ? 'Performance Gestual' : '');
-  const [motionEnabled, setMotionEnabled] = React.useState(true);
-  const [cameraEnabled, setCameraEnabled] = React.useState(false);
-  const [audioEnabled, setAudioEnabled] = React.useState(true);
-  const [oscHost, setOscHost] = React.useState('192.168.1.50');
-  const [oscPort, setOscPort] = React.useState('8443');
+  const { presets, createPreset, updatePreset } = usePresets();
+
+  // Find existing preset if editing
+  const existingPreset = isEditing ? presets.find((p) => p.id === presetId) : null;
+
+  // Form state
+  const [name, setName] = useState(existingPreset?.name || '');
+  const [motionEnabled, setMotionEnabled] = useState(existingPreset?.motion.enabled ?? true);
+  const [cameraEnabled, setCameraEnabled] = useState(existingPreset?.camera.enabled ?? false);
+  const [audioEnabled, setAudioEnabled] = useState(existingPreset?.audio.enabled ?? true);
+  const [oscHost, setOscHost] = useState(existingPreset?.oscTarget.host || '192.168.1.50');
+  const [oscPort, setOscPort] = useState(String(existingPreset?.oscTarget.port || 8443));
+
+  // Update form when preset loads
+  useEffect(() => {
+    if (existingPreset) {
+      setName(existingPreset.name);
+      setMotionEnabled(existingPreset.motion.enabled);
+      setCameraEnabled(existingPreset.camera.enabled);
+      setAudioEnabled(existingPreset.audio.enabled);
+      setOscHost(existingPreset.oscTarget.host);
+      setOscPort(String(existingPreset.oscTarget.port));
+    }
+  }, [existingPreset]);
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      Alert.alert('Error', 'Ingresa un nombre para el preset');
+      return;
+    }
+
+    const presetData = {
+      name: name.trim(),
+      motion: {
+        enabled: motionEnabled,
+        sensors: ['accel', 'gyro', 'mag'] as ('accel' | 'gyro' | 'mag')[],
+        interval: 33,
+      },
+      camera: {
+        enabled: cameraEnabled,
+        fps: 10,
+      },
+      audio: {
+        enabled: audioEnabled,
+        fftBins: 8,
+        level: true,
+      },
+      oscTarget: {
+        host: oscHost.trim() || '192.168.1.50',
+        port: parseInt(oscPort, 10) || 8443,
+      },
+    };
+
+    try {
+      if (isEditing && presetId) {
+        await updatePreset(presetId, presetData);
+      } else {
+        await createPreset(presetData);
+      }
+      navigation.goBack();
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo guardar el preset');
+    }
+  };
 
   return (
     <ScrollView style={styles.container}>
@@ -110,8 +178,10 @@ const PresetEditorScreen: React.FC<Props> = ({ navigation, route }) => {
 
       {/* Actions */}
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.saveButton}>
-          <Text style={styles.saveButtonText}>Guardar Preset</Text>
+        <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
+          <Text style={styles.saveButtonText}>
+            {isEditing ? 'Actualizar Preset' : 'Crear Preset'}
+          </Text>
         </TouchableOpacity>
       </View>
     </ScrollView>

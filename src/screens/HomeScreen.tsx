@@ -3,7 +3,7 @@
  * Main screen with live data, preset selector, and sensor tiles
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import { RootStackParamList } from '../types';
 import { colors } from '../theme/colors';
 import { useSensors } from '../hooks/useSensors';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { usePresets } from '../hooks/usePresets';
 import { webSocketService } from '../services/WebSocketService';
 
 type HomeScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
@@ -27,29 +28,35 @@ interface Props {
 }
 
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
+  // Presets
+  const { activePreset, presets } = usePresets();
+
   // Local UI state
   const [motionEnabled, setMotionEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(true);
-  const [showConnectionDialog, setShowConnectionDialog] = useState(false);
 
-  // WebSocket connection (auto-connect disabled, manual connect)
-  const {
-    status: wsStatus,
-    connect,
-    disconnect,
-  } = useWebSocket({ autoConnect: false });
+  // WebSocket connection
+  const { status: wsStatus, connect, disconnect } = useWebSocket({ autoConnect: false });
 
   // Motion sensor data - only active when motionEnabled is true
   const {
     motionData,
-    enabled: sensorsActive,
     setEnabled: setSensorsEnabled,
   } = useSensors({
     enabled: motionEnabled,
-    interval: 33,
+    interval: activePreset?.motion.interval || 33,
     webSocketService: wsStatus === 'connected' ? webSocketService : null,
   });
+
+  // Sync motion toggle with active preset
+  useEffect(() => {
+    if (activePreset) {
+      setMotionEnabled(activePreset.motion.enabled);
+      setCameraEnabled(activePreset.camera.enabled);
+      setAudioEnabled(activePreset.audio.enabled);
+    }
+  }, [activePreset]);
 
   const isConnected = wsStatus === 'connected';
 
@@ -81,9 +88,11 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             text: 'Conectar',
             onPress: (ip) => {
               if (ip) {
+                const host = ip.trim();
+                const port = activePreset?.oscTarget.port || 8443;
                 webSocketService.configure({
-                  host: ip,
-                  port: 8443,
+                  host,
+                  port,
                   path: '/',
                 });
                 connect();
@@ -92,10 +101,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           },
         ],
         'plain-text',
-        '192.168.1.50'
+        activePreset?.oscTarget.host || '192.168.1.50'
       );
     }
-  }, [isConnected, connect, disconnect]);
+  }, [isConnected, connect, disconnect, activePreset]);
 
   // Format motion data for display
   const formatMotionValue = (value: number): string => {
@@ -114,9 +123,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             style={[
               styles.statusDot,
               {
-                backgroundColor: isConnected
-                  ? colors.connected
-                  : colors.disconnected,
+                backgroundColor: isConnected ? colors.connected : colors.disconnected,
               },
             ]}
           />
@@ -128,10 +135,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             onPress={() => navigation.navigate('Settings')}>
             <Text style={styles.headerIcon}>⚙️</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.headerButton}
-            onPress={handleConnectPress}>
-            <Text style={styles.headerIcon}>{isConnected ? '📡' : '📡'}</Text>
+          <TouchableOpacity style={styles.headerButton} onPress={handleConnectPress}>
+            <Text style={styles.headerIcon}>📡</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -156,21 +161,15 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         <View style={styles.motionDataContainer}>
           <View style={styles.motionAxis}>
             <Text style={styles.axisLabel}>X</Text>
-            <Text style={styles.axisValue}>
-              {formatMotionValue(motionData.accel.x)}
-            </Text>
+            <Text style={styles.axisValue}>{formatMotionValue(motionData.accel.x)}</Text>
           </View>
           <View style={styles.motionAxis}>
             <Text style={styles.axisLabel}>Y</Text>
-            <Text style={styles.axisValue}>
-              {formatMotionValue(motionData.accel.y)}
-            </Text>
+            <Text style={styles.axisValue}>{formatMotionValue(motionData.accel.y)}</Text>
           </View>
           <View style={styles.motionAxis}>
             <Text style={styles.axisLabel}>Z</Text>
-            <Text style={styles.axisValue}>
-              {formatMotionValue(motionData.accel.z)}
-            </Text>
+            <Text style={styles.axisValue}>{formatMotionValue(motionData.accel.z)}</Text>
           </View>
         </View>
 
@@ -178,16 +177,9 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         <View style={styles.audioBar}>
           <Text style={styles.audioLabel}>audio:</Text>
           <View style={styles.audioBarContainer}>
-            <View
-              style={[
-                styles.audioBarFill,
-                { width: audioEnabled ? '45%' : '0%' },
-              ]}
-            />
+            <View style={[styles.audioBarFill, { width: audioEnabled ? '45%' : '0%' }]} />
           </View>
-          <Text style={styles.audioPercent}>
-            {audioEnabled ? '45%' : '--'}
-          </Text>
+          <Text style={styles.audioPercent}>{audioEnabled ? '45%' : '--'}</Text>
         </View>
       </View>
 
@@ -196,7 +188,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         style={styles.presetSelector}
         onPress={() => navigation.navigate('Presets')}>
         <Text style={styles.presetLabel}>preset:</Text>
-        <Text style={styles.presetName}>Performance</Text>
+        <Text style={styles.presetName}>{activePreset?.name || 'Sin preset'}</Text>
         <Text style={styles.presetArrow}>▼</Text>
       </TouchableOpacity>
 
@@ -208,11 +200,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           onPress={toggleMotion}>
           <Text style={styles.tileIcon}>🎯</Text>
           <Text style={styles.tileTitle}>MOTION</Text>
-          <Text
-            style={[
-              styles.tileStatus,
-              motionEnabled ? styles.statusOn : styles.statusOff,
-            ]}>
+          <Text style={[styles.tileStatus, motionEnabled ? styles.statusOn : styles.statusOff]}>
             {motionEnabled ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
@@ -223,11 +211,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           onPress={() => setCameraEnabled(!cameraEnabled)}>
           <Text style={styles.tileIcon}>📷</Text>
           <Text style={styles.tileTitle}>CAM</Text>
-          <Text
-            style={[
-              styles.tileStatus,
-              cameraEnabled ? styles.statusOn : styles.statusOff,
-            ]}>
+          <Text style={[styles.tileStatus, cameraEnabled ? styles.statusOn : styles.statusOff]}>
             {cameraEnabled ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
@@ -238,21 +222,16 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           onPress={() => setAudioEnabled(!audioEnabled)}>
           <Text style={styles.tileIcon}>🎤</Text>
           <Text style={styles.tileTitle}>AUDIO</Text>
-          <Text
-            style={[
-              styles.tileStatus,
-              audioEnabled ? styles.statusOn : styles.statusOff,
-            ]}>
+          <Text style={[styles.tileStatus, audioEnabled ? styles.statusOn : styles.statusOff]}>
             {audioEnabled ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Sensor Availability Debug Info */}
+      {/* Debug Info */}
       <View style={styles.debugInfo}>
         <Text style={styles.debugText}>
-          accel: {motionData.accel.x.toFixed(3)}, {motionData.accel.y.toFixed(3)},{' '}
-          {motionData.accel.z.toFixed(3)}
+          accel: {motionData.accel.x.toFixed(3)}, {motionData.accel.y.toFixed(3)}, {motionData.accel.z.toFixed(3)}
         </Text>
       </View>
     </SafeAreaView>
