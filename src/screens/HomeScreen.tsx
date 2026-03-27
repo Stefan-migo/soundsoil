@@ -3,7 +3,7 @@
  * Main screen with live data, preset selector, and sensor tiles
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,14 +12,17 @@ import {
   SafeAreaView,
   StatusBar,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { RootStackParamList } from '../types';
+import { Camera, useFrameProcessor, Frame } from 'react-native-vision-camera';
+import { RootStackParamList, CameraData } from '../types';
 import { colors } from '../theme/colors';
 import { useSensors } from '../hooks/useSensors';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { usePresets } from '../hooks/usePresets';
 import { useAudio } from '../hooks/useAudio';
+import { useCamera } from '../hooks/useCamera';
 import { webSocketService } from '../services/WebSocketService';
 
 type HomeScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
@@ -54,7 +57,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const {
     audioData,
     isRecording,
-    hasPermission,
+    hasPermission: hasAudioPermission,
     enabled: audioEnabledHook,
     setEnabled: setAudioEnabledHook,
   } = useAudio({
@@ -62,6 +65,51 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     fftBins: activePreset?.audio.fftBins || 8,
     webSocketService: wsStatus === 'connected' ? webSocketService : null,
   });
+
+  // Camera data
+  const {
+    cameraData,
+    isActive: isCameraActive,
+    hasPermission: hasCameraPermission,
+    enabled: cameraEnabledHook,
+    setEnabled: setCameraEnabledHook,
+    device: cameraDevice,
+  } = useCamera({
+    enabled: cameraEnabled,
+    fps: activePreset?.camera.fps || 10,
+    webSocketService: wsStatus === 'connected' ? webSocketService : null,
+  });
+
+  // Frame processor for VisionCamera
+  const frameProcessor = useFrameProcessor((frame: Frame) => {
+    'worklet';
+    if (!cameraEnabled || wsStatus !== 'connected') return;
+
+    const frameIntervalMs = 1000 / (activePreset?.camera.fps || 10);
+    const now = Date.now();
+
+    if ((frame as any).lastProcessedTime === undefined) {
+      (frame as any).lastProcessedTime = 0;
+    }
+
+    if (now - (frame as any).lastProcessedTime >= frameIntervalMs) {
+      (frame as any).lastProcessedTime = now;
+      try {
+        const base64 = frame.toString();
+        if (base64) {
+          const cameraData: CameraData = { frame: base64 };
+          // Send to WebSocket
+          webSocketService.send({
+            type: 'camera',
+            data: cameraData,
+            timestamp: now,
+          });
+        }
+      } catch {
+        // Frame may have been released
+      }
+    }
+  }, [cameraEnabled, wsStatus, activePreset?.camera.fps]);
 
   // Sync toggles with active preset
   useEffect(() => {
@@ -76,6 +124,11 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   useEffect(() => {
     setAudioEnabledHook(audioEnabled);
   }, [audioEnabled, setAudioEnabledHook]);
+
+  // Sync camera hook with cameraEnabled toggle
+  useEffect(() => {
+    setCameraEnabledHook(cameraEnabled);
+  }, [cameraEnabled, setCameraEnabledHook]);
 
   const isConnected = wsStatus === 'connected';
 
@@ -192,13 +245,13 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               />
             </View>
             <Text style={styles.audioPercent}>
-              {audioEnabled && hasPermission
+              {audioEnabled && hasAudioPermission
                 ? `${Math.round((audioData.level || 0) * 100)}%`
                 : '--'}
             </Text>
           </View>
           {/* FFT Bars */}
-          {audioEnabled && hasPermission && (
+          {audioEnabled && hasAudioPermission && (
             <View style={styles.fftContainer}>
               {audioData.fft?.map((value, index) => (
                 <View key={index} style={styles.fftBar}>
@@ -213,6 +266,36 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             </View>
           )}
         </View>
+
+        {/* Camera Preview */}
+        {cameraEnabled && hasCameraPermission && cameraDevice && (
+          <View style={styles.cameraPreviewContainer}>
+            <Text style={styles.liveDataLabel}>camera:</Text>
+            <View style={styles.cameraPreview}>
+              <Camera
+                style={styles.cameraPreviewInner}
+                device={cameraDevice}
+                isActive={isCameraActive}
+                frameProcessor={frameProcessor}
+              />
+            </View>
+            {wsStatus === 'connected' && (
+              <Text style={styles.cameraStatusText}>Enviando frames...</Text>
+            )}
+            {wsStatus !== 'connected' && (
+              <Text style={styles.cameraStatusTextOff}>Conecta para enviar</Text>
+            )}
+          </View>
+        )}
+
+        {cameraEnabled && !hasCameraPermission && (
+          <View style={styles.cameraPreviewContainer}>
+            <Text style={styles.liveDataLabel}>camera:</Text>
+            <View style={[styles.cameraPreview, styles.cameraPreviewOff]}>
+              <Text style={styles.cameraNoPermission}>Sin permiso de cámara</Text>
+            </View>
+          </View>
+        )}
       </View>
 
       {/* Preset Selector */}
@@ -240,7 +323,20 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         {/* Camera Tile */}
         <TouchableOpacity
           style={[styles.tile, cameraEnabled && styles.tileActive]}
-          onPress={() => setCameraEnabled(!cameraEnabled)}>
+          onPress={() => {
+            if (!hasCameraPermission) {
+              Alert.alert(
+                'Permiso de Cámara',
+                'Se necesita permiso de cámara para usar esta función.',
+                [
+                  { text: 'Cancelar', style: 'cancel' },
+                  { text: 'Conceder', onPress: () => setCameraEnabled(!cameraEnabled) },
+                ]
+              );
+            } else {
+              setCameraEnabled(!cameraEnabled);
+            }
+          }}>
           <Text style={styles.tileIcon}>📷</Text>
           <Text style={styles.tileTitle}>CAM</Text>
           <Text style={[styles.tileStatus, cameraEnabled ? styles.statusOn : styles.statusOff]}>
@@ -470,6 +566,43 @@ const styles = StyleSheet.create({
   },
   statusOff: {
     color: colors.inactive,
+  },
+  cameraPreviewContainer: {
+    width: '100%',
+    marginTop: 16,
+    alignItems: 'center',
+  },
+  cameraPreview: {
+    width: 160,
+    height: 120,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.divider,
+  },
+  cameraPreviewInner: {
+    width: '100%',
+    height: '100%',
+  },
+  cameraPreviewOff: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraNoPermission: {
+    color: colors.textMuted,
+    fontSize: 10,
+    textAlign: 'center',
+  },
+  cameraStatusText: {
+    color: colors.active,
+    fontSize: 10,
+    marginTop: 4,
+  },
+  cameraStatusTextOff: {
+    color: colors.inactive,
+    fontSize: 10,
+    marginTop: 4,
   },
   debugInfo: {
     position: 'absolute',
